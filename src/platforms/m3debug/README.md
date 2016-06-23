@@ -20,3 +20,6 @@ PA12 USB D+
 PA4 LED0
 PA5 LED1
 PA6 LED2
+
+Instead of usbuart.c, we have usbcan.c. Some of the functions have the same 
+name so that cdcacm can find them. It maps CAN packets over the serial port.

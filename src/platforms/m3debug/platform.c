@@ -24,7 +24,6 @@
 
 #include "general.h"
 #include "cdcacm.h"
-#include "usbuart.h"
 #include "morse.h"
 
 #include <libopencm3/stm32/f4/rcc.h>
@@ -41,6 +40,7 @@
 jmp_buf fatal_error_jmpbuf;
 
 static void adc_init(void);
+void usbcan_init(void);
 
 const clock_scale_t hse_26mhz_in_168mhz_out = {
     .pllm = 13,
@@ -91,7 +91,7 @@ void platform_init(void)
 			LED_UART | LED_IDLE_RUN | LED_ERROR);
 
 	platform_timing_init();
-	usbuart_init();
+    usbcan_init();
 	cdcacm_init();
     adc_init();
 }

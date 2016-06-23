@@ -107,36 +107,15 @@
  */
 #define IRQ_PRI_USB		(2 << 4)
 #define IRQ_PRI_USBUSART	(1 << 4)
+#define IRQ_PRI_USBCAN      (1 << 4)
 #define IRQ_PRI_USBUSART_TIM	(3 << 4)
-#define IRQ_PRI_TRACE		(0 << 4)
+#define IRQ_PRI_TRACE           (0 << 4)
 
-#define USBUSART USART1
-#define USBUSART_CR1 USART1_CR1
-#define USBUSART_IRQ NVIC_USART1_IRQ
-#define USBUSART_CLK RCC_USART1
-#define USBUSART_TX_PORT GPIOB
-#define USBUSART_TX_PIN  GPIO6
-#define USBUSART_RX_PORT GPIOB
-#define USBUSART_RX_PIN  GPIO7
-#define USBUSART_ISR usart1_isr
-#define USBUSART_TIM TIM4
-#define USBUSART_TIM_CLK_EN() rcc_periph_clock_enable(RCC_TIM4)
-#define USBUSART_TIM_IRQ NVIC_TIM4_IRQ
-#define USBUSART_TIM_ISR tim4_isr
+#define TRACE_TIM           TIM3
+#define TRACE_TIM_CLK_EN()  rcc_periph_clock_enable(RCC_TIM3)
+#define TRACE_IRQ           NVIC_TIM3_IRQ
+#define TRACE_ISR           tim3_isr
 
-#define UART_PIN_SETUP() do { \
-	gpio_mode_setup(USBUSART_TX_PORT, GPIO_MODE_AF, GPIO_PUPD_NONE, \
-	                USBUSART_TX_PIN); \
-	gpio_mode_setup(USBUSART_RX_PORT, GPIO_MODE_AF, GPIO_PUPD_NONE, \
-	                USBUSART_RX_PIN); \
-	gpio_set_af(USBUSART_TX_PORT, GPIO_AF7, USBUSART_TX_PIN); \
-	gpio_set_af(USBUSART_RX_PORT, GPIO_AF7, USBUSART_RX_PIN); \
-    } while(0)
-
-#define TRACE_TIM TIM3
-#define TRACE_TIM_CLK_EN() rcc_periph_clock_enable(RCC_TIM3)
-#define TRACE_IRQ   NVIC_TIM3_IRQ
-#define TRACE_ISR   tim3_isr
 
 #define DEBUG(...)
 
