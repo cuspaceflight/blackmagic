@@ -1,4 +1,4 @@
-PROBE_HOST ?= native
+PROBE_HOST ?= m3debug
 PLATFORM_DIR = platforms/$(PROBE_HOST)
 VPATH += platforms/common $(PLATFORM_DIR)
 ENABLE_DEBUG ?=
