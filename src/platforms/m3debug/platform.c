@@ -90,14 +90,25 @@ void platform_init(void)
 			GPIO_PUPD_NONE,
 			LED_UART | LED_IDLE_RUN | LED_ERROR);
 
+    platform_srst_set_val(false);
+    gpio_mode_setup(SRST_PORT, GPIO_MODE_OUTPUT, GPIO_PUPD_NONE, SRST_PIN);
+    gpio_set_output_options(SRST_PORT, GPIO_OTYPE_OD, GPIO_OSPEED_50MHZ, SRST_PIN);
+
 	platform_timing_init();
 	usbuart_init();
 	cdcacm_init();
     adc_init();
 }
 
-void platform_srst_set_val(bool assert) { (void)assert; }
-bool platform_srst_get_val(void) { return false; }
+void platform_srst_set_val(bool assert) {
+    gpio_set_val(SRST_PORT, SRST_PIN, !assert);
+    if(assert) {
+        for(int i=0; i<10000; i++) asm("nop");
+    }
+}
+bool platform_srst_get_val(void) {
+    return gpio_get(SRST_PORT, SRST_PIN) == 0;
+}
 
 static void adc_init()
 {
