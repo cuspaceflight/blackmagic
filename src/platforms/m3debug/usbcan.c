@@ -11,43 +11,66 @@
 #include "cdcacm.h"
 #include "platform.h"
 
-struct can_tx_msg {
-    uint32_t std_id;
-    uint32_t ext_id;
-    uint8_t ide;
-    uint8_t rtr;
-    uint8_t dlc;
-    uint8_t data[8];
+#define USBCAN_TIMER_FREQ_HZ 1000000U /* 1MHz timer      */
+#define USBCAN_RUN_FREQ_HZ   5000U    /* Run every 200us */
+
+struct can_msg {
+    union {
+        struct {
+            uint16_t id;
+            uint8_t  rtr;
+            uint8_t  len;
+            uint8_t  data[8];
+        };
+        uint8_t raw[12];
+    };
 };
 
-struct can_rx_msg {
-    uint32_t std_id;
-    uint32_t ext_id;
-    uint8_t ide;
-    uint8_t rtr;
-    uint8_t dlc;
-    uint8_t data[8];
-    uint8_t fmi;
-};
+#define USBCAN_FIFO_SIZE 64
 
-struct can_tx_msg can_tx_msg;
-struct can_rx_msg can_rx_msg;
+static struct can_msg can_buf[USBCAN_FIFO_SIZE];
+static uint8_t can_buf_in, can_buf_out;
+
+static void usbcan_run(void);
+static void usbcan_can_init(void);
 
 void usbuart_set_line_coding(struct usb_cdc_line_coding *coding)
 {
     (void)coding;
 }
 
-void usbuart_usb_out_cb(usbd_device *dev, uint8_t ep)
+void usbuart_usb_in_cb(usbd_device *dev, uint8_t ep)
 {
     (void)dev;
     (void)ep;
 }
 
-void usbuart_usb_in_cb(usbd_device *dev, uint8_t ep)
+
+/* Custom CAN init function as the timeout in libopencm3 is too
+ * small to work on a 168MHz F4, but there's no good way to
+ * override it without resorting to horrible hacks. Like this.
+ */
+static void usbcan_can_init()
 {
-    (void)dev;
-    (void)ep;
+    /* Turn on error LED first, turn it off once initialised,
+     * if we hit an error it'l just stay on.
+     */
+    gpio_set(LED_PORT, LED_ERROR);
+
+    /* Leave sleep */
+    CAN_MCR(CAN1) &= ~CAN_MCR_SLEEP;
+    /* Enter initialisation */
+    CAN_MCR(CAN1) |= CAN_MCR_INRQ;
+    /* Wait for acknowledgement */
+    while((CAN_MSR(CAN1) & CAN_MSR_INAK) != CAN_MSR_INAK);
+    /* Set config bits */
+    CAN_MCR(CAN1) = CAN_MCR_ABOM | CAN_MCR_AWUM;
+    /* Set timing bits for 1Mbps */
+    CAN_BTR(CAN1) = CAN_BTR_SJW_1TQ | CAN_BTR_TS1_3TQ | CAN_BTR_TS2_1TQ | 5;
+    /* Leave initialisation */
+    CAN_MCR(CAN1) &= ~CAN_MCR_INRQ;
+    /* Wait for acknowledgement */
+    while((CAN_MSR(CAN1) & CAN_MSR_INAK) != CAN_MSR_INAK);
 }
 
 
@@ -67,25 +90,7 @@ void usbcan_init(void)
     nvic_set_priority(NVIC_CAN1_TX_IRQ, IRQ_PRI_USBCAN);
 
     can_reset(CAN1);
-
-    if(can_init(CAN1,
-        false,              /* TTCM Time Triggered Comm Mode */
-        true,               /* ABOM Auto Bus Off Management */
-        false,              /* AWUM Auto Wake Up Mode */
-        false,              /* NART No Auto ReTransmission */
-        false,              /* RFLM Receive FIFO locked mode */
-        false,              /* TXFP Transmit FIFO priority */
-        CAN_BTR_SJW_1TQ,    /* Resync time quanta jump width */
-        CAN_BTR_TS1_9TQ,    /* Time segment 1 time quanta width */
-        CAN_BTR_TS2_6TQ,    /* Time segment 2 time quanta width */
-        2,                  /* Baud rate prescaler */
-        false,              /* Loopback */
-        false               /* Silent */
-        ))
-    {
-        gpio_set(LED_PORT, LED_ERROR);
-        while(1);
-    }
+    usbcan_can_init();
 
     can_filter_id_mask_32bit_init(CAN1,
         0,                  /* Filter ID */
@@ -96,9 +101,150 @@ void usbcan_init(void)
 
     can_enable_irq(CAN1, CAN_IER_FMPIE0);
 
+    /* Enable timer for processing FIFO */
+    rcc_periph_clock_enable(RCC_TIM4);
+    timer_reset(TIM4);
+    timer_set_mode(TIM4, TIM_CR1_CKD_CK_INT, TIM_CR1_CMS_EDGE,
+                         TIM_CR1_DIR_UP);
+    timer_set_prescaler(TIM4,
+        rcc_ppre2_frequency / USBCAN_TIMER_FREQ_HZ * 2 - 1);
+    timer_set_period(TIM4,
+        USBCAN_TIMER_FREQ_HZ / USBCAN_RUN_FREQ_HZ - 1);
+    nvic_set_priority(NVIC_TIM4_IRQ, (3<<4));
+    nvic_enable_irq(NVIC_TIM4_IRQ);
+    timer_enable_counter(TIM4);
+
 }
 
 void can1_rx0_isr(void);
 void can1_rx1_isr(void);
 void can1_sce_isr(void);
 void can1_tx_isr(void);
+void tim4_isr(void);
+
+/* Read a new CAN frame and store it in the FIFO. */
+void can1_rx0_isr() {
+    uint32_t id, fmi;
+    bool ext, rtr;
+    uint8_t length, data[8];
+
+    gpio_set(LED_PORT_UART, LED_UART);
+
+    can_receive(CAN1, 0, true, &id, &ext, &rtr, &fmi, &length, data);
+
+    /* Check the FIFO isn't full */
+    if(((can_buf_in + 1) % USBCAN_FIFO_SIZE) != can_buf_out) {
+
+        struct can_msg msg;
+        msg.id = id;
+        msg.rtr = rtr;
+        msg.len = length;
+        memcpy(msg.data, data, 8);
+
+        /* Insert into FIFO */
+        can_buf[can_buf_in++] = msg;
+
+        /* Wrap pointer */
+        if(can_buf_in >= USBCAN_FIFO_SIZE) {
+            can_buf_in = 0;
+        }
+
+        /* Enable processing of FIFO data later */
+        timer_enable_irq(TIM4, TIM_DIER_UIE);
+    }
+}
+
+/* Send CAN packets from computer to stack */
+void usbuart_usb_out_cb(usbd_device *dev, uint8_t ep)
+{
+    (void)ep;
+    int i;
+    struct can_msg msg;
+    char buf[CDCACM_PACKET_SIZE];
+    int len;
+    bool in_frame = false;
+    int msg_idx = 0;
+
+    len = usbd_ep_read_packet(dev, CDCACM_UART_ENDPOINT,
+                              buf, CDCACM_PACKET_SIZE);
+    gpio_set(LED_PORT_UART, LED_UART);
+
+    for(i=0; i<len; i++) {
+        if(!in_frame) {
+            if(buf[i] == 0x7E) {
+                in_frame = true;
+                msg_idx = 0;
+            }
+        } else {
+            if(buf[i] == 0x7D) {
+                msg.raw[msg_idx++] = buf[++i] ^ 0x20;
+            } else {
+                msg.raw[msg_idx++] = buf[i];
+            }
+
+            if(msg_idx == sizeof(msg.raw)) {
+                in_frame = false;
+                can_transmit(CAN1, msg.id, false, msg.rtr, msg.len, msg.data);
+            }
+        }
+    }
+
+    gpio_clear(LED_PORT_UART, LED_UART);
+}
+
+
+/* Send CAN packets from stack via FIFO to host over CDCACM */
+static void usbcan_run() {
+    /* Force empty buffer if no USB endpoint */
+    if(cdcacm_get_config() != 1) {
+        can_buf_out = can_buf_in;
+    }
+
+    if(can_buf_in == can_buf_out) {
+        /* If FIFO empty, nothing to do */
+        timer_disable_irq(TIM4, TIM_DIER_UIE);
+        gpio_clear(LED_PORT_UART, LED_UART);
+    } else {
+        /* Otherwise write CAN frames into USB packet buffer and send them */
+        uint8_t packet_buf[CDCACM_PACKET_SIZE + 32];
+        uint8_t packet_idx = 0;
+        uint8_t packet_size = 0;
+        int i;
+
+        while(can_buf_in != can_buf_out) {
+            struct can_msg msg = can_buf[can_buf_out++];
+            if(can_buf_out >= USBCAN_FIFO_SIZE) {
+                can_buf_out = 0;
+            }
+
+            packet_buf[packet_idx++] = 0x7E;
+            for(i=0; i<12; i++) {
+                uint8_t c = msg.raw[i];
+                if(c == 0x7E) {
+                    packet_buf[packet_idx++] = 0x7D;
+                    packet_buf[packet_idx++] = 0x5E;
+                } else if(c == 0x7D) {
+                    packet_buf[packet_idx++] = 0x7D;
+                    packet_buf[packet_idx++] = 0x5D;
+                } else {
+                    packet_buf[packet_idx++] = c;
+                }
+            }
+
+            if(packet_idx >= CDCACM_PACKET_SIZE) {
+                can_buf_out--;
+                break;
+            } else {
+                packet_size = packet_idx;
+            }
+        }
+
+        usbd_ep_write_packet(usbdev, CDCACM_UART_ENDPOINT,
+                             packet_buf, packet_size);
+    }
+}
+
+void tim4_isr() {
+    timer_clear_flag(TIM4, TIM_SR_UIF);
+    usbcan_run();
+}
