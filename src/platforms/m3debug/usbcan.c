@@ -57,20 +57,34 @@ static void usbcan_can_init()
      */
     gpio_set(LED_PORT, LED_ERROR);
 
+    /* Reset CAN peripheral */
+    can_reset(CAN1);
+
     /* Leave sleep */
     CAN_MCR(CAN1) &= ~CAN_MCR_SLEEP;
+    /* Wait to leave sleep */
+    while((CAN_MSR(CAN1) & CAN_MSR_SLAK) == CAN_MSR_SLAK);
     /* Enter initialisation */
     CAN_MCR(CAN1) |= CAN_MCR_INRQ;
     /* Wait for acknowledgement */
     while((CAN_MSR(CAN1) & CAN_MSR_INAK) != CAN_MSR_INAK);
     /* Set config bits */
-    CAN_MCR(CAN1) = CAN_MCR_ABOM | CAN_MCR_AWUM;
+    CAN_MCR(CAN1) = CAN_MCR_ABOM | CAN_MCR_AWUM | CAN_MCR_INRQ;
     /* Set timing bits for 1Mbps */
-    CAN_BTR(CAN1) = CAN_BTR_SJW_1TQ | CAN_BTR_TS1_3TQ | CAN_BTR_TS2_1TQ | 5;
+    CAN_BTR(CAN1) = (1<<CAN_BTR_SJW_SHIFT) | (3<<CAN_BTR_TS1_SHIFT) |
+                    (1<<CAN_BTR_TS2_SHIFT) | (5);
+    /* Initialise the filter banks: one all-matching filter to FIFO0 */
+    can_filter_init(CAN1, 0, 0, true, 0, 0, 0, true);
     /* Leave initialisation */
     CAN_MCR(CAN1) &= ~CAN_MCR_INRQ;
     /* Wait for acknowledgement */
-    while((CAN_MSR(CAN1) & CAN_MSR_INAK) != CAN_MSR_INAK);
+    while((CAN_MSR(CAN1) & CAN_MSR_INAK) == CAN_MSR_INAK);
+
+    /* Enable interrupt on packet received */
+    can_enable_irq(CAN1, CAN_IER_FMPIE0);
+
+    /* Clear LED once initialisation is complete */
+    gpio_clear(LED_PORT, LED_ERROR);
 }
 
 
@@ -81,25 +95,15 @@ void usbcan_init(void)
     gpio_mode_setup(GPIOB, GPIO_MODE_AF, GPIO_PUPD_NONE, GPIO8 | GPIO9);
     gpio_set_af(GPIOB, GPIO_AF9, GPIO8 | GPIO9);
     nvic_enable_irq(NVIC_CAN1_RX0_IRQ);
-    nvic_enable_irq(NVIC_CAN1_RX1_IRQ);
-    nvic_enable_irq(NVIC_CAN1_SCE_IRQ);
-    nvic_enable_irq(NVIC_CAN1_TX_IRQ);
+    /*nvic_enable_irq(NVIC_CAN1_RX1_IRQ);*/
+    /*nvic_enable_irq(NVIC_CAN1_SCE_IRQ);*/
+    /*nvic_enable_irq(NVIC_CAN1_TX_IRQ);*/
     nvic_set_priority(NVIC_CAN1_RX0_IRQ, IRQ_PRI_USBCAN);
-    nvic_set_priority(NVIC_CAN1_RX1_IRQ, IRQ_PRI_USBCAN);
-    nvic_set_priority(NVIC_CAN1_SCE_IRQ, IRQ_PRI_USBCAN);
-    nvic_set_priority(NVIC_CAN1_TX_IRQ, IRQ_PRI_USBCAN);
+    /*nvic_set_priority(NVIC_CAN1_RX1_IRQ, IRQ_PRI_USBCAN);*/
+    /*nvic_set_priority(NVIC_CAN1_SCE_IRQ, IRQ_PRI_USBCAN);*/
+    /*nvic_set_priority(NVIC_CAN1_TX_IRQ, IRQ_PRI_USBCAN);*/
 
-    can_reset(CAN1);
     usbcan_can_init();
-
-    can_filter_id_mask_32bit_init(CAN1,
-        0,                  /* Filter ID */
-        0,                  /* CAN ID */
-        0,                  /* CAN ID Mask */
-        0,                  /* FIFO assignment: FIFO0 */
-        true);              /* Enable filter */
-
-    can_enable_irq(CAN1, CAN_IER_FMPIE0);
 
     /* Enable timer for processing FIFO */
     rcc_periph_clock_enable(RCC_TIM4);
@@ -117,9 +121,9 @@ void usbcan_init(void)
 }
 
 void can1_rx0_isr(void);
-void can1_rx1_isr(void);
-void can1_sce_isr(void);
-void can1_tx_isr(void);
+/*void can1_rx1_isr(void);*/
+/*void can1_sce_isr(void);*/
+/*void can1_tx_isr(void);*/
 void tim4_isr(void);
 
 /* Read a new CAN frame and store it in the FIFO. */
