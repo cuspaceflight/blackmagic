@@ -20,7 +20,7 @@ clean:
 ##############################################################################
 # Black Magic Probe flashing via GDB
 #
-BMP_PORT = $(wildcard /dev/serial/by-id/usb-Black_Sphere_Technologies_Black_Magic_Probe_*-if00)
+BMP_PORT = $(wildcard /dev/serial/by-id/usb-Black_Sphere_Technologies_Black_Magic_Probe_E*-if00)
 flash: src/blackmagic
 	arm-none-eabi-gdb --batch \
 		              -ex 'target extended-remote $(BMP_PORT)' \
@@ -30,6 +30,7 @@ flash: src/blackmagic
 					  -ex 'load src/blackmagic'
 
 debug: src/blackmagic
+	arm-none-eabi-gdb \
 		              -ex 'target extended-remote $(BMP_PORT)' \
 		              -ex 'monitor swdp_scan' \
 					  -ex 'attach 1' \
