@@ -14,6 +14,8 @@
 #define USBCAN_TIMER_FREQ_HZ 1000000U /* 1MHz timer      */
 #define USBCAN_RUN_FREQ_HZ   5000U    /* Run every 200us */
 
+#define USBCAN_USE_FIFO      0
+
 struct can_msg {
     union {
         struct {
@@ -28,8 +30,10 @@ struct can_msg {
 
 #define USBCAN_FIFO_SIZE 64
 
+#if USBCAN_USE_FIFO
 static struct can_msg can_buf[USBCAN_FIFO_SIZE];
 static uint8_t can_buf_in, can_buf_out;
+#endif
 
 static void usbcan_run(void);
 static void usbcan_can_init(void);
@@ -99,6 +103,7 @@ void usbcan_init(void)
     nvic_enable_irq(NVIC_CAN1_RX0_IRQ);
     nvic_set_priority(NVIC_CAN1_RX0_IRQ, IRQ_PRI_USBCAN);
 
+#if USBCAN_USE_FIFO
     /* Enable timer for processing FIFO */
     rcc_peripheral_enable_clock(&RCC_APB1ENR, RCC_APB1ENR_TIM4EN);
     timer_reset(TIM4);
@@ -111,7 +116,7 @@ void usbcan_init(void)
     nvic_set_priority(NVIC_TIM4_IRQ, (3<<4));
     nvic_enable_irq(NVIC_TIM4_IRQ);
     timer_enable_counter(TIM4);
-
+#endif
 }
 
 void can1_rx0_isr(void);
@@ -122,15 +127,21 @@ void can1_rx0_isr() {
     uint32_t id, fmi;
     bool ext, rtr;
     uint8_t length, data[8];
+    struct can_msg msg;
 
     gpio_set(LED_PORT_UART, LED_UART);
 
     can_receive(CAN1, 0, true, &id, &ext, &rtr, &fmi, &length, data);
 
+    msg.id = id;
+    msg.rtr = rtr;
+    msg.len = length;
+    memcpy(msg.data, data, 8);
+
+#if USBCAN_USE_FIFO
     /* Check the FIFO isn't full */
     if(((can_buf_in + 1) % USBCAN_FIFO_SIZE) != can_buf_out) {
 
-        struct can_msg msg;
         msg.id = id;
         msg.rtr = rtr;
         msg.len = length;
@@ -148,6 +159,27 @@ void can1_rx0_isr() {
 
     /* Enable processing of FIFO data later */
     timer_enable_irq(TIM4, TIM_DIER_UIE);
+#else
+    uint8_t packet_buf[CDCACM_PACKET_SIZE];
+    int packet_idx=0, i;
+    packet_buf[packet_idx++] = 0x7E;
+    for(i=0; i<12; i++) {
+        uint8_t c = msg.raw[i];
+        if(c == 0x7E) {
+            packet_buf[packet_idx++] = 0x7D;
+            packet_buf[packet_idx++] = 0x5E;
+        } else if(c == 0x7D) {
+            packet_buf[packet_idx++] = 0x7D;
+            packet_buf[packet_idx++] = 0x5D;
+        } else {
+            packet_buf[packet_idx++] = c;
+        }
+    }
+    usbd_ep_write_packet(usbdev, CDCACM_UART_ENDPOINT,
+                         packet_buf, packet_idx);
+
+    gpio_clear(LED_PORT_UART, LED_UART);
+#endif
 }
 
 /* Send CAN packets from computer to stack */
@@ -191,6 +223,7 @@ void usbuart_usb_out_cb(usbd_device *dev, uint8_t ep)
 
 /* Send CAN packets from stack via FIFO to host over CDCACM */
 static void usbcan_run() {
+#if USBCAN_USE_FIFO
     /* Force empty buffer if no USB endpoint */
     if(cdcacm_get_config() != 1) {
         can_buf_out = can_buf_in;
@@ -238,6 +271,7 @@ static void usbcan_run() {
         usbd_ep_write_packet(usbdev, CDCACM_UART_ENDPOINT,
                              packet_buf, packet_size);
     }
+#endif
 }
 
 void tim4_isr() {
