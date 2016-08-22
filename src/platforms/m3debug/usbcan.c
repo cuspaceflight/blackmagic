@@ -190,8 +190,8 @@ void usbuart_usb_out_cb(usbd_device *dev, uint8_t ep)
     struct can_msg msg;
     char buf[CDCACM_PACKET_SIZE];
     int len;
-    bool in_frame = false;
-    int msg_idx = 0;
+    static bool in_frame = false;
+    static int msg_idx = 0;
 
     len = usbd_ep_read_packet(dev, CDCACM_UART_ENDPOINT,
                               buf, CDCACM_PACKET_SIZE);
@@ -210,7 +210,7 @@ void usbuart_usb_out_cb(usbd_device *dev, uint8_t ep)
                 msg.raw[msg_idx++] = buf[i];
             }
 
-            if(msg_idx == sizeof(msg.raw)) {
+            if(msg_idx > 4 && msg_idx == msg.len + 4) {
                 in_frame = false;
                 can_transmit(CAN1, msg.id, false, msg.rtr, msg.len, msg.data);
             }
