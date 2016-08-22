@@ -74,7 +74,7 @@ static void usbcan_can_init()
     CAN_BTR(CAN1) = (1<<CAN_BTR_SJW_SHIFT) | (3<<CAN_BTR_TS1_SHIFT) |
                     (1<<CAN_BTR_TS2_SHIFT) | (5);
     /* Initialise the filter banks: one all-matching filter to FIFO0 */
-    can_filter_init(CAN1, 0, 0, true, 0, 0, 0, true);
+    can_filter_init(CAN1, 0, true, false, 0, 0, 0, true);
     /* Leave initialisation */
     CAN_MCR(CAN1) &= ~CAN_MCR_INRQ;
     /* Wait for acknowledgement */
@@ -90,23 +90,17 @@ static void usbcan_can_init()
 
 void usbcan_init(void)
 {
-    rcc_periph_clock_enable(RCC_CAN1);
-    rcc_periph_clock_enable(RCC_GPIOB);
+    rcc_peripheral_enable_clock(&RCC_APB1ENR, RCC_APB1ENR_CAN1EN);
     gpio_mode_setup(GPIOB, GPIO_MODE_AF, GPIO_PUPD_NONE, GPIO8 | GPIO9);
     gpio_set_af(GPIOB, GPIO_AF9, GPIO8 | GPIO9);
-    nvic_enable_irq(NVIC_CAN1_RX0_IRQ);
-    /*nvic_enable_irq(NVIC_CAN1_RX1_IRQ);*/
-    /*nvic_enable_irq(NVIC_CAN1_SCE_IRQ);*/
-    /*nvic_enable_irq(NVIC_CAN1_TX_IRQ);*/
-    nvic_set_priority(NVIC_CAN1_RX0_IRQ, IRQ_PRI_USBCAN);
-    /*nvic_set_priority(NVIC_CAN1_RX1_IRQ, IRQ_PRI_USBCAN);*/
-    /*nvic_set_priority(NVIC_CAN1_SCE_IRQ, IRQ_PRI_USBCAN);*/
-    /*nvic_set_priority(NVIC_CAN1_TX_IRQ, IRQ_PRI_USBCAN);*/
 
     usbcan_can_init();
 
+    nvic_enable_irq(NVIC_CAN1_RX0_IRQ);
+    nvic_set_priority(NVIC_CAN1_RX0_IRQ, IRQ_PRI_USBCAN);
+
     /* Enable timer for processing FIFO */
-    rcc_periph_clock_enable(RCC_TIM4);
+    rcc_peripheral_enable_clock(&RCC_APB1ENR, RCC_APB1ENR_TIM4EN);
     timer_reset(TIM4);
     timer_set_mode(TIM4, TIM_CR1_CKD_CK_INT, TIM_CR1_CMS_EDGE,
                          TIM_CR1_DIR_UP);
@@ -121,9 +115,6 @@ void usbcan_init(void)
 }
 
 void can1_rx0_isr(void);
-/*void can1_rx1_isr(void);*/
-/*void can1_sce_isr(void);*/
-/*void can1_tx_isr(void);*/
 void tim4_isr(void);
 
 /* Read a new CAN frame and store it in the FIFO. */
@@ -153,9 +144,10 @@ void can1_rx0_isr() {
             can_buf_in = 0;
         }
 
-        /* Enable processing of FIFO data later */
-        timer_enable_irq(TIM4, TIM_DIER_UIE);
     }
+
+    /* Enable processing of FIFO data later */
+    timer_enable_irq(TIM4, TIM_DIER_UIE);
 }
 
 /* Send CAN packets from computer to stack */
