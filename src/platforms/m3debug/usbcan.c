@@ -133,6 +133,11 @@ void can1_rx0_isr() {
 
     can_receive(CAN1, 0, true, &id, &ext, &rtr, &fmi, &length, data);
 
+    /* Early return if no USB connected */
+    if(cdcacm_get_config() != 1) {
+        return;
+    }
+
     msg.id = id;
     msg.rtr = rtr;
     msg.len = length;
