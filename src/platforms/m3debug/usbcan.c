@@ -215,7 +215,7 @@ void usbuart_usb_out_cb(usbd_device *dev, uint8_t ep)
                 msg.raw[msg_idx++] = buf[i];
             }
 
-            if(msg_idx > 4 && msg_idx == msg.len + 4) {
+            if(msg_idx >= 4 && msg_idx == msg.len + 4) {
                 in_frame = false;
                 can_transmit(CAN1, msg.id, false, msg.rtr, msg.len, msg.data);
             }
