@@ -14,7 +14,7 @@
 #define USBCAN_TIMER_FREQ_HZ 1000000U /* 1MHz timer      */
 #define USBCAN_RUN_FREQ_HZ   5000U    /* Run every 200us */
 
-#define USBCAN_USE_FIFO      0
+#define USBCAN_USE_FIFO      1
 
 struct can_msg {
     union {
@@ -29,7 +29,7 @@ struct can_msg {
 };
 
 #define USBCAN_FIFO_SIZE 64
-
+// Circular buffer of CAN messages received from CAN and to be sent to USB
 #if USBCAN_USE_FIFO
 static struct can_msg can_buf[USBCAN_FIFO_SIZE];
 static uint8_t can_buf_in, can_buf_out;
@@ -38,11 +38,13 @@ static uint8_t can_buf_in, can_buf_out;
 static void usbcan_run(void);
 static void usbcan_can_init(void);
 
+// Function required by cdcacm.c for us to pretend to be usbuart
 void usbuart_set_line_coding(struct usb_cdc_line_coding *coding)
 {
     (void)coding;
 }
 
+// Function required by cdcacm.c for us to pretend to be usbuart
 void usbuart_usb_in_cb(usbd_device *dev, uint8_t ep)
 {
     (void)dev;
@@ -57,7 +59,7 @@ void usbuart_usb_in_cb(usbd_device *dev, uint8_t ep)
 static void usbcan_can_init()
 {
     /* Turn on error LED first, turn it off once initialised,
-     * if we hit an error it'l just stay on.
+     * if we hit an error it'll just stay on.
      */
     gpio_set(LED_PORT, LED_ERROR);
 
@@ -105,6 +107,7 @@ void usbcan_init(void)
 
 #if USBCAN_USE_FIFO
     /* Enable timer for processing FIFO */
+    /* How often does this timer interrupt? */
     rcc_peripheral_enable_clock(&RCC_APB1ENR, RCC_APB1ENR_TIM4EN);
     timer_reset(TIM4);
     timer_set_mode(TIM4, TIM_CR1_CKD_CK_INT, TIM_CR1_CMS_EDGE,
@@ -122,7 +125,9 @@ void usbcan_init(void)
 void can1_rx0_isr(void);
 void tim4_isr(void);
 
-/* Read a new CAN frame and store it in the FIFO. */
+/* Read a new CAN frame
+ * In FIFO mode, store it in the FIFO
+ * In non-FIFO mode, send it straight over USB. */
 void can1_rx0_isr() {
     uint32_t id, fmi;
     bool ext, rtr;
@@ -133,7 +138,7 @@ void can1_rx0_isr() {
 
     can_receive(CAN1, 0, true, &id, &ext, &rtr, &fmi, &length, data);
 
-    /* Early return if no USB connected */
+    /* Discard the packet if no USB connected */
     if(cdcacm_get_config() != 1) {
         return;
     }
@@ -144,13 +149,8 @@ void can1_rx0_isr() {
     memcpy(msg.data, data, 8);
 
 #if USBCAN_USE_FIFO
-    /* Check the FIFO isn't full */
+    /* Check the FIFO isn't full.  If it is, discard the packet */
     if(((can_buf_in + 1) % USBCAN_FIFO_SIZE) != can_buf_out) {
-
-        msg.id = id;
-        msg.rtr = rtr;
-        msg.len = length;
-        memcpy(msg.data, data, 8);
 
         /* Insert into FIFO */
         can_buf[can_buf_in++] = msg;
@@ -187,7 +187,7 @@ void can1_rx0_isr() {
 #endif
 }
 
-/* Send CAN packets from computer to stack */
+/* Send CAN packets from computer to m3avionics */
 void usbuart_usb_out_cb(usbd_device *dev, uint8_t ep)
 {
     (void)ep;
@@ -226,7 +226,7 @@ void usbuart_usb_out_cb(usbd_device *dev, uint8_t ep)
 }
 
 
-/* Send CAN packets from stack via FIFO to host over CDCACM */
+/* Send CAN packets from m3avionics via FIFO to host over CDCACM */
 static void usbcan_run() {
 #if USBCAN_USE_FIFO
     /* Force empty buffer if no USB endpoint */
@@ -239,14 +239,19 @@ static void usbcan_run() {
         timer_disable_irq(TIM4, TIM_DIER_UIE);
         gpio_clear(LED_PORT_UART, LED_UART);
     } else {
+        /* can_buf_in != can_buf_out, so we should have some packets! */
         /* Otherwise write CAN frames into USB packet buffer and send them */
         uint8_t packet_buf[CDCACM_PACKET_SIZE + 32];
         uint8_t packet_idx = 0;
-        uint8_t packet_size = 0;
+        volatile uint8_t packet_size = 0;
         int i;
 
+        // Add as many CAN messages to the USB packet as will fit or are
+        // available.
         while(can_buf_in != can_buf_out) {
-            struct can_msg msg = can_buf[can_buf_out++];
+            // Pop the oldest message out of the buffer, wrap pointer if needed
+            struct can_msg msg = can_buf[can_buf_out];
+            can_buf_out += 1;
             if(can_buf_out >= USBCAN_FIFO_SIZE) {
                 can_buf_out = 0;
             }
@@ -266,13 +271,23 @@ static void usbcan_run() {
             }
 
             if(packet_idx >= CDCACM_PACKET_SIZE) {
-                can_buf_out--;
-                break;
+                // The USB packet is (over)full, so we need can't send the last
+                // packet.  Move the pointer backwards so this last packet gets
+                // processed next time, wrapping if necessary.
+                if(can_buf_out == 0) {
+                    can_buf_out = USBCAN_FIFO_SIZE - 1;
+                } else {
+                    can_buf_out--;
+                }
+                break;  // Stop filling the packet and send it.
+
             } else {
                 packet_size = packet_idx;
             }
         }
-
+        // TODO: How are we getting to this point with packet_size == 0
+        // This is what I am observing and I am deeply suspicious, but I'm not
+        // sure how much it correlates with the weird lack-of-packets bug.
         usbd_ep_write_packet(usbdev, CDCACM_UART_ENDPOINT,
                              packet_buf, packet_size);
     }
