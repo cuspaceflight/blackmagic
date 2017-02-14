@@ -51,6 +51,13 @@ void jtagtap_reset(void)
 	jtagtap_soft_reset();
 }
 
+static void jtagtap_delay(void)
+{
+    for(int i=0; i<3; i++) {
+        asm("nop\r\n nop\r\n nop\r\n nop\r\n nop\r\n");
+    }
+}
+
 inline uint8_t jtagtap_next(uint8_t dTMS, uint8_t dTDO)
 {
 	uint16_t ret;
@@ -58,8 +65,10 @@ inline uint8_t jtagtap_next(uint8_t dTMS, uint8_t dTDO)
 	gpio_set_val(TMS_PORT, TMS_PIN, dTMS);
 	gpio_set_val(TDI_PORT, TDI_PIN, dTDO);
 	gpio_set(TCK_PORT, TCK_PIN);
+    jtagtap_delay();
 	ret = gpio_get(TDO_PORT, TDO_PIN);
 	gpio_clear(TCK_PORT, TCK_PIN);
+    jtagtap_delay();
 
 	//DEBUG("jtagtap_next(TMS = %d, TDO = %d) = %d\n", dTMS, dTDO, ret);
 
